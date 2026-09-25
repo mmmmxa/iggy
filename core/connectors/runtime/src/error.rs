@@ -107,9 +107,10 @@ mod tests {
 
         let error = RuntimeError::from(inner);
 
-        assert!(
-            error.to_string().contains(&expected),
-            "RuntimeError should carry the IggyError message, got: {error}"
+        assert_eq!(
+            error.to_string(),
+            expected,
+            "RuntimeError should carry the IggyError message"
         );
     }
 
@@ -120,9 +121,10 @@ mod tests {
 
         let error = RuntimeError::from(inner);
 
-        assert!(
-            error.to_string().contains(&expected),
-            "RuntimeError should carry the ClientError message, got: {error}"
+        assert_eq!(
+            error.to_string(),
+            expected,
+            "RuntimeError should carry the ClientError message"
         );
     }
 
@@ -133,9 +135,10 @@ mod tests {
 
         let error = RuntimeError::from(inner);
 
-        assert!(
-            error.to_string().contains(&expected),
-            "RuntimeError should carry the SDK error message, got: {error}"
+        assert_eq!(
+            error.to_string(),
+            expected,
+            "RuntimeError should carry the SDK error message"
         );
     }
 
@@ -146,9 +149,10 @@ mod tests {
 
         let error = RuntimeError::from(inner);
 
-        assert!(
-            error.to_string().contains(&expected),
-            "RuntimeError should carry the JSON error message, got: {error}"
+        assert_eq!(
+            error.to_string(),
+            expected,
+            "RuntimeError should carry the JSON error message"
         );
     }
 }
