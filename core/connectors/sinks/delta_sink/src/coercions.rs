@@ -20,7 +20,7 @@ use deltalake::kernel::{DataType, PrimitiveType};
 
 use chrono::prelude::*;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +83,40 @@ fn build_coercion_node(data_type: &DataType) -> Option<CoercionNode> {
         // pass through to the Delta writer unchanged. Add support if these types are needed.
         _ => None,
     }
+}
+
+/// Names of the table's top-level columns, used to reject records that would be written as all nulls.
+pub(crate) fn table_columns(schema: &DeltaSchema) -> HashSet<String> {
+    schema
+        .fields()
+        .map(|field| field.name().to_string())
+        .collect()
+}
+
+/// Returns an error if a JSON object shares no top-level key with the table.
+///
+/// The Arrow JSON decoder ignores unknown keys and fills missing columns with null, so such a
+/// record would otherwise be committed as a row of nulls. Non-objects are left for the writer
+/// to reject with its own error.
+pub(crate) fn ensure_fields_overlap(
+    value: &Value,
+    columns: &HashSet<String>,
+) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    if object.keys().any(|key| columns.contains(key)) {
+        return Ok(());
+    }
+
+    let mut record_keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    let mut table_keys: Vec<&str> = columns.iter().map(String::as_str).collect();
+    record_keys.sort_unstable();
+    table_keys.sort_unstable();
+    Err(format!(
+        "record has no fields in common with the table schema, it would be written as all nulls. \
+         record fields: {record_keys:?}, table columns: {table_keys:?}"
+    ))
 }
 
 /// Applies all data coercions specified by the [`CoercionTree`] to the [`Value`].
@@ -618,6 +652,38 @@ mod tests {
         coerce(&mut value, &tree).unwrap();
 
         assert_eq!(value["level1_timestamp"], json!(epoch_micros));
+    }
+
+    #[test]
+    fn given_record_with_one_matching_field_should_pass_overlap_check() {
+        let delta_schema: DeltaSchema = serde_json::from_value(SCHEMA.clone()).unwrap();
+        let columns = table_columns(&delta_schema);
+
+        let value = json!({ "level1_integer": 1, "unknown": true });
+
+        assert!(ensure_fields_overlap(&value, &columns).is_ok());
+    }
+
+    #[test]
+    fn given_record_with_no_matching_field_should_fail_overlap_check() {
+        let delta_schema: DeltaSchema = serde_json::from_value(SCHEMA.clone()).unwrap();
+        let columns = table_columns(&delta_schema);
+
+        for value in [json!({ "foo": 1, "bar": 2 }), json!({})] {
+            let err = ensure_fields_overlap(&value, &columns).unwrap_err();
+            assert!(
+                err.contains("level1_integer"),
+                "table columns missing: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn given_non_object_record_should_skip_overlap_check() {
+        let delta_schema: DeltaSchema = serde_json::from_value(SCHEMA.clone()).unwrap();
+        let columns = table_columns(&delta_schema);
+
+        assert!(ensure_fields_overlap(&json!([1, 2]), &columns).is_ok());
     }
 
     #[test]

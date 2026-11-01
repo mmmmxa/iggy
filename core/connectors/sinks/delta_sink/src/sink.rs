@@ -17,7 +17,7 @@
 
 use crate::DeltaSink;
 use crate::SinkState;
-use crate::coercions::{coerce, create_coercion_tree};
+use crate::coercions::{coerce, create_coercion_tree, ensure_fields_overlap, table_columns};
 use crate::storage::build_storage_options;
 use async_trait::async_trait;
 use deltalake::writer::{DeltaWriter, JsonWriter};
@@ -99,6 +99,7 @@ impl Sink for DeltaSink {
         // TODO: coercion tree is never refreshed if the schema changes concurrently,
         // leading to opaque errors downstream.
         let coercion_tree = create_coercion_tree(&kernel_schema);
+        let table_columns = table_columns(&kernel_schema);
 
         let writer = JsonWriter::for_table(&table).map_err(|e| {
             error!("Failed to create JsonWriter: {e}");
@@ -109,6 +110,7 @@ impl Sink for DeltaSink {
             table,
             writer,
             coercion_tree,
+            table_columns,
         });
 
         info!(
@@ -150,6 +152,8 @@ impl Sink for DeltaSink {
 
         // Apply coercions to match Delta table schema
         for value in &mut json_values {
+            ensure_fields_overlap(value, &state.table_columns)
+                .map_err(Error::InvalidRecordValue)?;
             coerce(value, &state.coercion_tree).map_err(Error::InvalidRecordValue)?;
         }
 

@@ -20,6 +20,7 @@ use deltalake::writer::JsonWriter;
 use iggy_connector_sdk::sink_connector;
 use secrecy::SecretString;
 use serde::Deserialize;
+use std::collections::HashSet;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,7 @@ struct SinkState {
     table: DeltaTable,
     writer: JsonWriter,
     coercion_tree: CoercionTree,
+    table_columns: HashSet<String>,
 }
 
 #[derive(Debug, Deserialize)]

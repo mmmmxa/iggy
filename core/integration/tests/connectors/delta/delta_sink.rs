@@ -351,3 +351,60 @@ async fn delta_sink_handles_corrupted_delta_log(
         "the error is expected since the delta log's commit file is corrupted"
     );
 }
+
+#[iggy_harness(
+    server(connectors_runtime(config_path = "tests/connectors/delta/sink.toml")),
+    seed = seeds::connector_stream
+)]
+async fn delta_sink_rejects_records_with_no_fields_in_common_with_table(
+    harness: &TestHarness,
+    fixture: DeltaFixture,
+) {
+    let client = harness.root_client().await.unwrap();
+    let stream_id: Identifier = seeds::names::STREAM.try_into().unwrap();
+    let topic_id: Identifier = seeds::names::TOPIC.try_into().unwrap();
+
+    let mut messages: Vec<IggyMessage> = (1..=3u128)
+        .map(|id| {
+            let payload = serde_json::to_vec(&serde_json::json!({ "unrelated": id }))
+                .expect("Failed to serialize message");
+            IggyMessage::builder()
+                .id(id)
+                .payload(Bytes::from(payload))
+                .build()
+                .expect("Failed to build message")
+        })
+        .collect();
+
+    client
+        .send_messages(
+            &stream_id,
+            &topic_id,
+            &Partitioning::partition_id(0),
+            &mut messages,
+        )
+        .await
+        .expect("Failed to send messages");
+
+    let runtime = harness
+        .connectors_runtime()
+        .expect("connector runtime should be available");
+    let mut rejected = false;
+    for _ in 0..VERSION_POLL_ATTEMPTS {
+        let (stdout, stderr) = runtime.collect_logs();
+        if format!("{stdout}\n{stderr}").contains("no fields in common with the table schema") {
+            rejected = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(VERSION_POLL_INTERVAL_MS)).await;
+    }
+    assert!(
+        rejected,
+        "the sink should reject records that share no field with the table"
+    );
+
+    fixture
+        .wait_for_row_count(1, 2, VERSION_POLL_INTERVAL_MS)
+        .await
+        .expect_err("no all-null rows should be written to the table");
+}
