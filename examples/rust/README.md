@@ -162,17 +162,17 @@ cargo run --example new-sdk-producer
 cargo run --example new-sdk-consumer
 ```
 
-Showcases the newer SDK APIs with simplified setup, automatic topic creation, consumer groups, and AutoCommit configuration.
+Showcases the newer SDK APIs with simplified setup, automatic topic creation, consumer groups, and offsets that the server stores on each poll.
 
 ### High-Volume Data Generation
 
-Testing and benchmarking support:
+Testing and benchmarking support. The example feeds the Delta Lake sink connector:
 
 ```bash
 cargo run --example sink-data-producer
 ```
 
-Produces 100 batches of 100 to 499 random user records, with a direct-send request limit of 1000 messages. Connection and stream settings are configurable via environment variables.
+Produces 100 batches of 100 to 499 random user records to the `users` topic of the `example_stream` stream (created if missing), with a direct-send request limit of 1000 messages. Connection and stream settings are configurable via environment variables. To run it end to end with the connectors runtime and an S3 emulator, follow the [connectors Quick Start](../../core/connectors/README.md#quick-start).
 
 ## Stream Builder Examples
 
@@ -195,7 +195,7 @@ cargo run --example stream-producer-config
 cargo run --example stream-consumer-config
 ```
 
-These examples document all available configuration options including partitioning strategies, retry policies, batching, AutoCommit strategies, polling strategies, and retry mechanisms.
+These examples document all available configuration options including partitioning strategies, retry policies, batching, offset commit policies, polling strategies, and retry mechanisms.
 
 ## Security Examples
 
