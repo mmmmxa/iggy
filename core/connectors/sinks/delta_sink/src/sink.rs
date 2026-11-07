@@ -18,6 +18,7 @@
 use crate::DeltaSink;
 use crate::SinkState;
 use crate::coercions::{coerce, create_coercion_tree};
+use crate::schema::schema_differences;
 use crate::storage::build_storage_options;
 use async_trait::async_trait;
 use deltalake::arrow::datatypes::SchemaRef;
@@ -26,6 +27,7 @@ use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use iggy_connector_sdk::{ConsumedMessage, Error, MessagesMetadata, Payload, Sink, TopicMetadata};
 use simd_json::OwnedValue;
+use simd_json::prelude::ValueAsObject;
 use tracing::{debug, error, info};
 
 // TODO: Expose metrics for observability purposes
@@ -96,6 +98,18 @@ impl Sink for DeltaSink {
                 Error::InitError(format!("deltalake-rs interface: failed to get the table's latest snapshot. See deltalake::DeltaTable::snapshot for more information. Error message: {e}"))
             })?
             .schema();
+
+        if let Some(expected_schema) = &self.config.expected_schema {
+            let differences = schema_differences(expected_schema, &kernel_schema);
+            if !differences.is_empty() {
+                let message = format!(
+                    "the schema of the table '{table_uri}' does not match expected_schema: {}",
+                    differences.join("; ")
+                );
+                error!("Connector configuration: {message}");
+                return Err(Error::InitError(message));
+            }
+        }
 
         // TODO: coercion tree is never refreshed if the schema changes concurrently,
         // leading to opaque errors downstream.
@@ -200,7 +214,21 @@ impl Sink for DeltaSink {
 }
 
 fn record_batch(values: &[OwnedValue], schema: SchemaRef) -> Result<RecordBatch, Error> {
+    // An empty object has no key for strict mode to reject, yet it becomes a row of nulls.
+    if values
+        .iter()
+        .any(|value| value.as_object().is_some_and(|object| object.is_empty()))
+    {
+        return Err(Error::InvalidRecordValue(
+            "record is an empty object, it would be written as a row of nulls".to_string(),
+        ));
+    }
+
+    // Without strict mode the decoder drops keys that are not table columns and fills the
+    // columns it did not see with null, so a record that shares no field with the table
+    // is committed as a row of nulls.
     let mut decoder = ReaderBuilder::new(schema)
+        .with_strict_mode(true)
         .with_batch_size(values.len())
         .build_decoder()
         .map_err(|e| Error::InvalidRecordValue(e.to_string()))?;
@@ -237,8 +265,8 @@ fn json_values(messages: Vec<ConsumedMessage>) -> Result<Vec<OwnedValue>, Error>
 #[cfg(test)]
 mod tests {
     use super::{json_values, record_batch};
-    use deltalake::arrow::array::{ArrayRef, Float64Array, Int64Array};
-    use deltalake::arrow::datatypes::{DataType, Field, Schema};
+    use deltalake::arrow::array::{Array, ArrayRef, Float64Array, Int64Array};
+    use deltalake::arrow::datatypes::{DataType, Field, Fields, Schema};
     use deltalake::arrow::record_batch::RecordBatch;
     use iggy_connector_sdk::{ConsumedMessage, Error, Payload};
     use std::sync::Arc;
@@ -264,6 +292,68 @@ mod tests {
         )
         .expect("numeric columns");
         assert_eq!(batch, expected);
+    }
+
+    fn nested_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new(
+                "address",
+                DataType::Struct(Fields::from(vec![Field::new("city", DataType::Utf8, true)])),
+                true,
+            ),
+        ]))
+    }
+
+    #[test]
+    fn given_record_with_unknown_field_when_decoding_should_fail() {
+        let values = vec![simd_json::json!({"id": 1, "email": "a@b.c"})];
+
+        let error = record_batch(&values, nested_schema()).expect_err("unknown field");
+
+        assert!(
+            matches!(&error, Error::InvalidRecordValue(message) if message.contains("email")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn given_record_with_no_field_in_common_when_decoding_should_fail() {
+        let values = vec![simd_json::json!({"unrelated": 1})];
+
+        assert!(record_batch(&values, nested_schema()).is_err());
+    }
+
+    #[test]
+    fn given_record_with_unknown_nested_field_when_decoding_should_fail() {
+        let values = vec![simd_json::json!({"id": 1, "address": {"city": "x", "zip": "1"}})];
+
+        let error = record_batch(&values, nested_schema()).expect_err("unknown nested field");
+
+        assert!(
+            matches!(&error, Error::InvalidRecordValue(message) if message.contains("zip")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn given_empty_record_when_decoding_should_fail() {
+        let values = vec![simd_json::json!({"id": 1}), simd_json::json!({})];
+
+        assert!(matches!(
+            record_batch(&values, nested_schema()),
+            Err(Error::InvalidRecordValue(_))
+        ));
+    }
+
+    #[test]
+    fn given_record_missing_some_columns_when_decoding_should_fill_nulls() {
+        let values = vec![simd_json::json!({"id": 1})];
+
+        let batch = record_batch(&values, nested_schema()).expect("subset of columns");
+
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.column(1).null_count(), 1);
     }
 
     fn message(payload: Payload) -> ConsumedMessage {

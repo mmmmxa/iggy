@@ -87,6 +87,7 @@ The configuration is usually written individually for every connector and consis
 
 - **table_uri** (required): Absolute URI to the Delta table. Supported schemes: `file://`, `s3://`, `az://`, `gs://`. Bare filesystem paths are not accepted; local tables must use the `file://` scheme.
 - **storage_backend_type** (optional): The cloud storage backend to use. One of `"s3"`, `"azure"`, or `"gcs"`. Omit for local filesystem tables.
+- **expected_schema** (optional): The column names and types that the table must have. If the table schema differs, the connector fails to start and lists every difference. See [Schema Enforcement](#schema-enforcement).
 
 #### Local filesystem
 
@@ -195,3 +196,28 @@ The connector automatically coerces JSON values to match the Delta table schema:
 - **Timestamp fields**: ISO 8601 / RFC 3339 formatted strings (e.g. `"2021-11-11T22:11:58Z", "2021-11-11 22:11:58"`) are converted to microsecond timestamps. Integer epoch-microsecond timestamps pass through unchanged. Space-separated timestamps without an offset are interpreted as UTC. Invalid timestamp strings fail the batch.
 - **String fields**: Non-null, non-string values (numbers, booleans, objects, arrays) are converted to their string representation.
 - **Nested fields**: Coercions cover nested structs, arrays of strings or timestamps, and arrays of structs. Nested arrays, maps, and variant columns pass through without these coercions. Nulls remain null.
+
+## Schema Enforcement
+
+The connector rejects a batch that contains a record with a field that is not a column of the table. This applies to nested fields too. The error names the unknown field. A record that omits some columns is accepted, and the connector writes null in those columns. A record that is an empty object is rejected, because the connector would write a row of nulls.
+
+To stop the connector at startup when the table does not have the schema that you expect, add `expected_schema` to `[plugin_config]`. It lists column names and types. The connector compares it with the table when it starts. If a column is missing, extra, or has a different type, the connector does not start and the error lists each difference.
+
+```toml
+[plugin_config]
+table_uri = "file:///tmp/iggy_delta_table"
+
+[plugin_config.expected_schema]
+id = "long"
+name = "string"
+created_at = "timestamp_ntz"
+tags = ["string"]                          # array of string
+address = { city = "string", zip = "string" }  # struct
+attributes = "map<string, long>"           # map
+```
+
+- Write a type as Delta prints it, for example `string`, `long`, `integer`, `double`, `boolean`, `date`, `timestamp`, `timestamp_ntz`, or `decimal(10,2)`.
+- Write an array as a list with one element type. Write a struct as a table of its columns.
+- Write a map or variant column as the exact string that Delta prints, for example `"map<string, long>"` or `"variant"`.
+- The comparison covers names and types only. It ignores nullability, because writers often disagree on nullable flags, especially in nested fields. Enforce nullability in downstream processing if you need it.
+- The connector reads the table schema once, when it starts. It does not detect a schema change while it runs.

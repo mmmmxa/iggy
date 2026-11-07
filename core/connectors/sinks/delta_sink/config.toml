@@ -59,3 +59,13 @@ table_uri = "file:///tmp/iggy_delta_table"
 # GCS options:
 # storage_backend_type = "gcs"
 # gcs_service_account_key = '{"type": "service_account", ...}'
+
+# expected_schema: column names and types that the table must have. The connector does not
+# start if the table differs. Nullability is not compared. Keep this section after all other
+# [plugin_config] keys, because TOML puts every key below a table header into that table.
+# [plugin_config.expected_schema]
+# id = "long"
+# name = "string"
+# created_at = "timestamp_ntz"
+# tags = ["string"]                              # array of string
+# address = { city = "string", zip = "string" }  # struct

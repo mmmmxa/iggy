@@ -136,6 +136,7 @@ mod tests {
         DeltaSinkConfig {
             table_uri: "file:///tmp/test".into(),
             storage_backend_type: None,
+            expected_schema: None,
             aws_s3_access_key: None,
             aws_s3_secret_key: None,
             aws_s3_region: None,

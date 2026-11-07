@@ -20,6 +20,7 @@ use deltalake::writer::RecordBatchWriter;
 use iggy_connector_sdk::sink_connector;
 use secrecy::SecretString;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Deserialize)]
@@ -31,10 +32,12 @@ pub enum StorageBackendType {
 }
 
 mod coercions;
+mod schema;
 mod sink;
 mod storage;
 
 use crate::coercions::CoercionTree;
+use crate::schema::ExpectedType;
 
 sink_connector!(DeltaSink);
 
@@ -58,6 +61,8 @@ pub struct DeltaSinkConfig {
     pub table_uri: String,
     #[serde(default)]
     pub storage_backend_type: Option<StorageBackendType>,
+    #[serde(default)]
+    pub expected_schema: Option<BTreeMap<String, ExpectedType>>,
 
     // AWS S3
     #[serde(default)]
