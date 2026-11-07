@@ -23,6 +23,7 @@ use secrecy::SecretString;
 use tracing::warn;
 
 use crate::bridge::error::BridgeError;
+use crate::bridge::nodes::KnownNodes;
 use crate::bridge::topic_map::{TopicMapping, validate_identifier_name};
 use crate::env::parse_bool;
 
@@ -132,6 +133,9 @@ pub struct IggyBridgeConfig {
     /// Transport security of every client the bridge opens.
     pub tls: IggyTls,
     pub produce_sessions: ProduceSessionLimits,
+    /// The nodes of the last roster the bridge read, which each new client dials after `address`.
+    /// No variable sets it: the bridge fills it, and every clone of this config shares it.
+    pub nodes: KnownNodes,
 }
 
 impl IggyBridgeConfig {
@@ -163,8 +167,8 @@ impl IggyBridgeConfig {
     /// `IGGY_KAFKA_IGGY_PASSWORD` has no default and must be set explicitly. `iggy-server` only
     /// provisions the well-known `iggy`/`iggy` root credentials when started with
     /// `--with-default-root-credentials` (`args.rs`, itself documented "INSECURE - FOR DEVELOPMENT
-    /// ONLY!"); without that flag it generates a random password (`boot/credentials.rs`) that no
-    /// constant here could ever guess. Defaulting the password to `"iggy"` would make this bridge
+    /// ONLY!"). Otherwise the operator supplies `IGGY_ROOT_PASSWORD`, which no constant here could
+    /// ever guess. Defaulting the password to `"iggy"` would make this bridge
     /// silently authenticate as root, with the credential in no config file and no log, on any
     /// server that does happen to run dev-flagged - the failure mode of getting it wrong is a
     /// loud, immediate auth rejection instead.
@@ -197,9 +201,9 @@ impl IggyBridgeConfig {
         }
         let password = std::env::var("IGGY_KAFKA_IGGY_PASSWORD").map_err(|_| {
             BridgeError::InvalidConfig(
-                "IGGY_KAFKA_IGGY_PASSWORD must be set - iggy-server generates a random root \
-                 password unless started with --with-default-root-credentials, so there is no \
-                 safe default to fall back to"
+                "IGGY_KAFKA_IGGY_PASSWORD must be set: the iggy-server root password is the \
+                 operator's own unless started with --with-default-root-credentials, so there is \
+                 no safe default to fall back to"
                     .to_string(),
             )
         })?;
@@ -278,6 +282,7 @@ impl IggyBridgeConfig {
             max_message_size,
             tls,
             produce_sessions,
+            nodes: KnownNodes::default(),
         })
     }
 }
@@ -313,6 +318,7 @@ mod tests {
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
             tls: IggyTls::default(),
             produce_sessions: ProduceSessionLimits::default(),
+            nodes: KnownNodes::default(),
         }
     }
 

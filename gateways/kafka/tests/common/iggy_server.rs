@@ -34,7 +34,8 @@ use iggy::prelude::{AutoLogin, Client, Credentials, IggyClient, IggyClientBuilde
 use secrecy::SecretString;
 
 use iggy_gateway_kafka::bridge::{
-    DEFAULT_MAX_MESSAGE_SIZE, IggyBridgeConfig, IggyTls, ProduceSessionLimits, TopicMapping,
+    DEFAULT_MAX_MESSAGE_SIZE, IggyBridgeConfig, IggyTls, KnownNodes, ProduceSessionLimits,
+    TopicMapping,
 };
 
 /// Desired slot count - the actual count `port_band()` computes may be smaller if the machine's
@@ -262,7 +263,12 @@ impl TestServer {
     /// its assertions, orphaning a process that still holds its `PortGuard` slot, which then
     /// fails the next test that draws that slot to bind.
     pub async fn spawn_with_password(data_dir: &std::path::Path, password: &str) -> Self {
-        Self::spawn_configured(data_dir, password, None).await
+        Self::spawn_configured(data_dir, password, None, &[], PortGuard::acquire()).await
+    }
+
+    /// [`Self::spawn`] with server settings of its own, as `IGGY_*` variables.
+    pub async fn spawn_with_env(data_dir: &std::path::Path, env: &[(&str, &str)]) -> Self {
+        Self::spawn_configured(data_dir, "iggy", None, env, PortGuard::acquire()).await
     }
 
     /// Spawns `iggy-server` whose TCP listener speaks only TLS, with the given PEM pair.
@@ -274,15 +280,28 @@ impl TestServer {
         cert_file: &std::path::Path,
         key_file: &std::path::Path,
     ) -> Self {
-        Self::spawn_configured(data_dir, "iggy", Some((cert_file, key_file))).await
+        Self::spawn_configured(
+            data_dir,
+            "iggy",
+            Some((cert_file, key_file)),
+            &[],
+            PortGuard::acquire(),
+        )
+        .await
+    }
+
+    /// [`Self::spawn`] on the port that [`Self::stop`] kept, as a node that comes back.
+    pub async fn spawn_on(data_dir: &std::path::Path, port_guard: PortGuard) -> Self {
+        Self::spawn_configured(data_dir, "iggy", None, &[], port_guard).await
     }
 
     async fn spawn_configured(
         data_dir: &std::path::Path,
         password: &str,
         tls: Option<(&std::path::Path, &std::path::Path)>,
+        env: &[(&str, &str)],
+        port_guard: PortGuard,
     ) -> Self {
-        let port_guard = PortGuard::acquire();
         let address = format!("127.0.0.1:{}", port_guard.port);
 
         let mut command = Command::new(iggy_server_binary());
@@ -318,11 +337,11 @@ impl TestServer {
             // fixed range (matching the same harness's own fallback for an unreadable core count)
             // caps that instead.
             .env("IGGY_SHARDING_CPU_ALLOCATION", "0..4")
-            // `--with-default-root-credentials` is off by default (args.rs) - without these,
-            // a fresh server provisions no loginable root user at all, and every bridge connect
-            // attempt fails with "invalid credentials" no matter what this test passes.
+            // `--with-default-root-credentials` is off by default (args.rs), and without these
+            // the server refuses to boot. The password is the one the bridge logs in with.
             .env("IGGY_ROOT_USERNAME", "iggy")
-            .env("IGGY_ROOT_PASSWORD", password);
+            .env("IGGY_ROOT_PASSWORD", password)
+            .envs(env.iter().copied());
         if let Some((cert_file, key_file)) = tls {
             // `self_signed` is off explicitly: left on, the server would still load an existing
             // pair, but the test should fail loudly on a missing file rather than mint one.
@@ -355,6 +374,13 @@ impl TestServer {
         port_guard
     }
 
+    /// Kills the server with SIGKILL, skipping its shutdown path the way a crash would. The data
+    /// dir stays, for a new server to start on.
+    pub fn crash(mut self) {
+        self.child.kill().expect("SIGKILL iggy-server");
+        let _ = self.child.wait();
+    }
+
     /// Polls with a bare TCP connect, not a full `IggyBridge::connect`: the latter carries
     /// `RECONNECTION_RETRIES` (3 retries after the first attempt, 4 dials at ~1s apart total) on
     /// every failed attempt, so a poll loop built
@@ -377,6 +403,7 @@ impl TestServer {
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
             tls: IggyTls::default(),
             produce_sessions: ProduceSessionLimits::default(),
+            nodes: KnownNodes::default(),
         }
     }
 }
